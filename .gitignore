@@ -1,0 +1,24 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller & Build artifacts
+build/
+dist/FastConnect3G/
+dist/*.zip
+dist/*.exe
+*.spec.bak
+
+# Raw dumps from original dongle (repacked drivers are in drivers/)
+extracted/
+
+# Environments & IDEs
+.env
+.venv/
+env/
+venv/
+.idea/
+.vscode/
+*.suo
+*.user

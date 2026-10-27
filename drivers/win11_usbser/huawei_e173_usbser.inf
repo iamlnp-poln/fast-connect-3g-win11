@@ -1,0 +1,38 @@
+;
+; Huawei 3G DCom (E173) Windows 11 In-Box Driver INF
+; Solution 1: Uses Windows 11 built-in usbser.sys (100% HVCI / Memory Integrity Compliant)
+; Zero third-party kernel driver required.
+;
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=Ports
+ClassGuid={4d36e978-e325-11ce-bfc1-08002be10318}
+Provider=%ManufacturerName%
+DriverVer=10/27/2026,1.0.0.0
+
+[Manufacturer]
+%ManufacturerName%=Standard,NTamd64
+
+[Standard.NTamd64]
+%HuaweiModem.DeviceDesc% = UsbSerial_Install, USB\VID_12D1&PID_1436&MI_00
+%HuaweiPCUI.DeviceDesc%  = UsbSerial_Install, USB\VID_12D1&PID_1436&MI_03
+%HuaweiDiag.DeviceDesc%  = UsbSerial_Install, USB\VID_12D1&PID_1436&MI_04
+
+[UsbSerial_Install.NT]
+Include=usbser.inf
+Needs=UsbSerial_Install
+
+[UsbSerial_Install.NT.Services]
+Include=usbser.inf
+Needs=UsbSerial_Install.Services
+
+[UsbSerial_Install.NT.Hw]
+Include=usbser.inf
+Needs=UsbSerial_Install.Hw
+
+[Strings]
+ManufacturerName="Huawei Technologies Co., Ltd."
+HuaweiModem.DeviceDesc="HUAWEI Mobile Connect - 3G Modem Port (usbser)"
+HuaweiPCUI.DeviceDesc="HUAWEI Mobile Connect - 3G PC UI Interface (usbser)"
+HuaweiDiag.DeviceDesc="HUAWEI Mobile Connect - 3G Application Interface (usbser)"
