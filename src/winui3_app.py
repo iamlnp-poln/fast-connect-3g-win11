@@ -55,6 +55,8 @@ class TelemetrySignals(QObject):
     connection_state_changed = pyqtSignal(bool, str)      # is_connected, message
     driver_status_checked = pyqtSignal(bool, str)         # is_driver_ok, status_detail
     hardware_state_changed = pyqtSignal(str, str, str)    # state, detail, drive
+    notification_requested = pyqtSignal(str, str, str, int)  # ntype, title, msg, duration
+    mode_switch_finished = pyqtSignal(bool, str)          # ok, msg
     sms_loaded = pyqtSignal(list)                         # messages list
     sms_sent = pyqtSignal(bool, str)                      # ok, msg
     radio_mode_result = pyqtSignal(bool, str)             # ok, msg
@@ -256,43 +258,61 @@ class DashboardInterface(QScrollArea):
     def _toggle_mode_switch(self):
         main_win = self.window()
         current_state = getattr(main_win, "current_hw_state", "DISCONNECTED")
+        if getattr(main_win, "is_switching_mode", False):
+            return
+
         if current_state == "ZEROCD":
             self.btn_switch.setEnabled(False)
+            self.btn_connect.setEnabled(False)
             self.btn_switch.setText("Đang chuyển sang User Mode...")
-            InfoBar.info(
-                "Đang chuyển mạch SCSI",
-                "Đang gửi lệnh chuyển sang Chế độ Modem 3G (User Mode)...",
-                parent=main_win,
-                position=InfoBarPosition.TOP_RIGHT,
-                duration=4000
+            self.btn_connect.setText("ĐANG CHUYỂN MẠCH...")
+            main_win.signals.notification_requested.emit(
+                "info", "Đang chuyển mạch SCSI",
+                "Đang gửi lệnh chuyển sang Chế độ Modem 3G (User Mode)...", 3000
             )
+
             def _task():
-                ok, msg = auto_detect_and_switch()
-                if ok:
-                    InfoBar.success("Thành công", msg, parent=main_win, position=InfoBarPosition.TOP_RIGHT, duration=4000)
-                else:
-                    InfoBar.warning("Thông báo", msg, parent=main_win, position=InfoBarPosition.TOP_RIGHT, duration=5000)
+                main_win.is_switching_mode = True
+                try:
+                    ok, msg = auto_detect_and_switch()
+                    if ok:
+                        main_win.signals.notification_requested.emit("success", "Thành công", msg, 4000)
+                    else:
+                        main_win.signals.notification_requested.emit("warning", "Thông báo", msg, 5000)
+                    main_win.signals.mode_switch_finished.emit(ok, msg)
+                finally:
+                    main_win.is_switching_mode = False
+
             threading.Thread(target=_task, daemon=True).start()
 
         elif current_state == "MODEM":
             self.btn_switch.setEnabled(False)
+            self.btn_connect.setEnabled(False)
             self.btn_switch.setText("Đang chuyển về ZeroCD...")
-            InfoBar.info(
-                "Chuyển mạch ZeroCD",
-                "Đang chuyển thiết bị về chế độ ổ đĩa ảo ZeroCD...",
-                parent=main_win,
-                position=InfoBarPosition.TOP_RIGHT,
-                duration=4000
+            self.btn_connect.setText("ĐANG CHUYỂN VỀ ZEROCD...")
+            main_win.signals.notification_requested.emit(
+                "info", "Chuyển mạch ZeroCD",
+                "Đang chuyển thiết bị về chế độ ổ đĩa ảo ZeroCD...", 3000
             )
+
             def _task():
-                if main_win.dialer.is_connected:
-                    main_win.dialer.disconnect()
-                    time.sleep(0.5)
-                ok, msg = switch_modem_to_zerocd(main_win.at_engine)
-                if ok:
-                    InfoBar.success("Chuyển mạch ZeroCD", msg, parent=main_win, position=InfoBarPosition.TOP_RIGHT, duration=4000)
-                else:
-                    InfoBar.warning("Lỗi chuyển mạch", msg, parent=main_win, position=InfoBarPosition.TOP_RIGHT, duration=5000)
+                main_win.is_switching_mode = True
+                try:
+                    if main_win.dialer.is_connected:
+                        main_win.dialer.disconnect()
+                        time.sleep(0.4)
+                    if main_win.at_engine.is_connected:
+                        main_win.at_engine.disconnect()
+                        time.sleep(0.3)
+                    ok, msg = switch_modem_to_zerocd(main_win.at_engine)
+                    if ok:
+                        main_win.signals.notification_requested.emit("success", "Chuyển mạch ZeroCD", msg, 4000)
+                    else:
+                        main_win.signals.notification_requested.emit("warning", "Thông báo", msg, 5000)
+                    main_win.signals.mode_switch_finished.emit(ok, msg)
+                finally:
+                    main_win.is_switching_mode = False
+
             threading.Thread(target=_task, daemon=True).start()
 
     def on_hardware_state_changed(self, state, detail, drive):
@@ -874,6 +894,7 @@ class WinUI3MainWindow(FluentWindow):
         self.current_carrier = "MobiFone"
         self.current_hw_state = "DISCONNECTED"
         self.current_has_driver_err = False
+        self.is_switching_mode = False
         self.signals = TelemetrySignals()
 
         # Connect signals
@@ -884,6 +905,8 @@ class WinUI3MainWindow(FluentWindow):
         self.signals.connection_state_changed.connect(self._on_conn_state_changed)
         self.signals.driver_status_checked.connect(self._on_driver_status_checked)
         self.signals.hardware_state_changed.connect(self._on_hw_state_changed)
+        self.signals.notification_requested.connect(self._on_notification_requested)
+        self.signals.mode_switch_finished.connect(self._on_mode_switch_finished)
         self.signals.sms_loaded.connect(self._on_sms_loaded)
         self.signals.sms_sent.connect(self._on_sms_sent)
         self.signals.radio_mode_result.connect(self._on_radio_mode_updated)
@@ -1011,10 +1034,29 @@ class WinUI3MainWindow(FluentWindow):
         else:
             InfoBar.error("Lỗi cấu hình sóng", msg, parent=self, position=InfoBarPosition.TOP_RIGHT, duration=6000)
 
+    def _on_notification_requested(self, ntype, title, msg, duration):
+        if ntype == "success":
+            InfoBar.success(title, msg, parent=self, position=InfoBarPosition.TOP_RIGHT, duration=duration)
+        elif ntype == "warning":
+            InfoBar.warning(title, msg, parent=self, position=InfoBarPosition.TOP_RIGHT, duration=duration)
+        elif ntype == "error":
+            InfoBar.error(title, msg, parent=self, position=InfoBarPosition.TOP_RIGHT, duration=duration)
+        else:
+            InfoBar.info(title, msg, parent=self, position=InfoBarPosition.TOP_RIGHT, duration=duration)
+
+    def _on_mode_switch_finished(self, ok, msg):
+        self.dashboardInterface.btn_switch.setEnabled(True)
+        self.dashboardInterface.btn_connect.setEnabled(True)
+
     def _background_telemetry_loop(self):
         last_state = None
         while self.is_running:
             try:
+                # Pause telemetry while mode switching is in progress to prevent COM port contention
+                if getattr(self, "is_switching_mode", False):
+                    time.sleep(0.5)
+                    continue
+
                 # 1. Real-time Hardware PnP State Scan via native SetupAPI
                 state, detail, drive, has_driver_err = get_device_state()
                 self.current_hw_state = state

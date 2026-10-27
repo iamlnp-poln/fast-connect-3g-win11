@@ -271,31 +271,41 @@ def auto_detect_and_switch():
 
 def switch_modem_to_zerocd(at_engine=None):
     """Switches modem from User Mode back to ZeroCD mode."""
-    if at_engine and at_engine.is_connected:
-        try:
-            at_engine.send_cmd("AT^U2DIAG=1")
-            time.sleep(0.3)
-            at_engine.send_cmd("AT+CFUN=1,1")
-            at_engine.disconnect()
-            return True, "Đã gửi lệnh chuyển về Ổ đĩa ZeroCD (Thiết bị đang khởi động lại...)"
-        except Exception as e:
-            return False, f"Lỗi: {e}"
-
-    ports = serial.tools.list_ports.comports()
-    for p in ports:
-        if "12D1" in (p.hwid or "").upper() or "HUAWEI" in (p.description or "").upper():
+    # 1. Try through existing or auto-connected at_engine
+    if at_engine:
+        if not at_engine.is_connected:
+            at_engine.auto_connect()
+        if at_engine.is_connected:
             try:
-                import serial as ser
-                with ser.Serial(p.device, 115200, timeout=1.0) as s:
-                    s.write(b"AT^U2DIAG=1\r\n")
-                    time.sleep(0.2)
-                    s.write(b"AT+CFUN=1,1\r\n")
-                    time.sleep(0.3)
-                return True, "Đã gửi lệnh chuyển về Ổ đĩa ZeroCD!"
+                at_engine.send_cmd("AT^U2DIAG=1", wait_time=0.2)
+                time.sleep(0.2)
+                at_engine.send_cmd("AT+CFUN=1,1", wait_time=0.2)
+                at_engine.disconnect()
+                return True, "Đã gửi lệnh chuyển về Ổ đĩa ZeroCD (Thiết bị đang khởi động lại...)"
             except Exception:
-                continue
+                pass
 
-    return False, "Không tìm thấy cổng COM modem để chuyển về ZeroCD."
+    # 2. Try direct serial on all candidate ports with short 0.8s timeout
+    try:
+        ports = serial.tools.list_ports.comports()
+        for p in ports:
+            hwid = (p.hwid or "").upper()
+            desc = (p.description or "").upper()
+            if "12D1" in hwid or "HUAWEI" in desc:
+                try:
+                    import serial as ser
+                    with ser.Serial(p.device, 115200, timeout=0.8) as s:
+                        s.write(b"AT^U2DIAG=1\r\n")
+                        time.sleep(0.2)
+                        s.write(b"AT+CFUN=1,1\r\n")
+                        time.sleep(0.3)
+                    return True, "Đã gửi lệnh chuyển về Ổ đĩa ZeroCD!"
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    return False, "Không thể kết nối cổng AT để chuyển mạch (Vui lòng bấm 'Sửa lỗi Driver HVCI' trước)."
 
 
 def restore_factory_modem_mode(at_engine=None):
