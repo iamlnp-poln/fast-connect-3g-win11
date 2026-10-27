@@ -113,13 +113,16 @@ def query_present_huawei_devices():
 
 def find_zerocd_drive():
     """Finds the drive letter for the Huawei ZeroCD virtual CD-ROM."""
-    for letter in ["E", "D", "F", "G", "H", "I"]:
+    kernel32 = ctypes.windll.kernel32
+    for letter in ["E", "D", "F", "G", "H", "I", "J", "K"]:
         path = f"{letter}:\\"
         try:
-            if os.path.exists(path):
+            # DRIVE_CDROM = 5. Only check physical/virtual optical drives to avoid false positives on hard drives
+            if kernel32.GetDriveTypeW(path) == 5:
                 if (os.path.exists(os.path.join(path, "AutoRun.exe")) or
                     os.path.exists(os.path.join(path, "fast connect")) or
-                    os.path.exists(os.path.join(path, "SysConfig.dat"))):
+                    os.path.exists(os.path.join(path, "SysConfig.dat")) or
+                    os.path.exists(os.path.join(path, "driver"))):
                     return letter
         except Exception:
             continue
@@ -142,7 +145,7 @@ def get_device_state():
         for p in ports:
             hwid = (p.hwid or "").upper()
             desc = (p.description or "").upper()
-            if "12D1" in hwid or "HUAWEI" in desc:
+            if ("12D1" in hwid or "HUAWEI" in desc) and "BTH" not in hwid:
                 com_ports.append(p.device)
     except Exception:
         pass
@@ -162,7 +165,6 @@ def get_device_state():
     )
     if ("1436" in pids or "1003" in pids) and len(com_ports) == 0:
         has_problem = True
-    has_blocked_file = os.path.exists(r"C:\Windows\System32\drivers\ewusbmdm.sys")
 
     # 2. ZEROCD state:
     # Present device has PID 1446, OR CD drive exists while no working modem COM ports are open
@@ -172,7 +174,7 @@ def get_device_state():
     # 3. MODEM state (User Mode):
     # PID 1436 or PID 1003 or active COM ports
     if "1436" in pids or "1003" in pids or len(com_ports) > 0:
-        driver_err = has_problem or has_blocked_file
+        driver_err = has_problem
         pid_label = "PID_1436" if "1436" in pids else ("PID_1003" if "1003" in pids else "Modem 3G")
         return "MODEM", f"Chế độ Modem 3G ({pid_label})", cd_drive, driver_err
 
@@ -278,32 +280,38 @@ def switch_modem_to_zerocd(at_engine=None):
         if at_engine.is_connected:
             try:
                 at_engine.send_cmd("AT^U2DIAG=1", wait_time=0.2)
-                time.sleep(0.2)
+                time.sleep(0.15)
                 at_engine.send_cmd("AT+CFUN=1,1", wait_time=0.2)
                 at_engine.disconnect()
                 return True, "Đã gửi lệnh chuyển về Ổ đĩa ZeroCD (Thiết bị đang khởi động lại...)"
             except Exception:
                 pass
 
-    # 2. Try direct serial on all candidate ports with short 0.8s timeout
+    # 2. Try direct serial on all Huawei candidate ports with short 0.5s timeout
     try:
         ports = serial.tools.list_ports.comports()
         for p in ports:
             hwid = (p.hwid or "").upper()
             desc = (p.description or "").upper()
-            if "12D1" in hwid or "HUAWEI" in desc:
+            if any(b in hwid for b in ("BTH", "BLUETOOTH", "BTHENUM")) or "BLUETOOTH" in desc:
+                continue
+            if "12D1" in hwid or "HUAWEI" in desc or ("MOBILE" in desc and "USB" in hwid):
                 try:
                     import serial as ser
-                    with ser.Serial(p.device, 115200, timeout=0.8) as s:
+                    with ser.Serial(p.device, 115200, timeout=0.5) as s:
                         s.write(b"AT^U2DIAG=1\r\n")
-                        time.sleep(0.2)
+                        time.sleep(0.15)
                         s.write(b"AT+CFUN=1,1\r\n")
-                        time.sleep(0.3)
+                        time.sleep(0.2)
                     return True, "Đã gửi lệnh chuyển về Ổ đĩa ZeroCD!"
                 except Exception:
                     continue
     except Exception:
         pass
+
+    # If the virtual CD-ROM drive already appeared, transition is done
+    if find_zerocd_drive():
+        return True, "Thiết bị đã ở chế độ Ổ đĩa ảo ZeroCD!"
 
     return False, "Không thể kết nối cổng AT để chuyển mạch (Vui lòng bấm 'Sửa lỗi Driver HVCI' trước)."
 

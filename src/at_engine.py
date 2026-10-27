@@ -28,32 +28,46 @@ class HuaweiATEngine:
         for p in ports:
             hwid = (p.hwid or "").upper()
             desc = (p.description or "").upper()
-            # Huawei VID: 12D1, PID: 1436 or 140C or generic Huawei/Mobile
-            if "12D1" in hwid or "HUAWEI" in desc or "MOBILE" in desc:
-                candidates.append((p.device, p.description, hwid))
-            elif "USB SERIAL" in desc:
-                candidates.append((p.device, p.description, hwid))
-        return candidates
+            device = (p.device or "").upper()
+
+            # Strictly exclude Bluetooth links, Intel AMT, and motherboard serial ports
+            if any(b in hwid for b in ("BTH", "BLUETOOTH", "BTHENUM", "PCI\\VEN_8086", "ACPI")):
+                continue
+            if any(b in desc for b in ("BLUETOOTH", "INTEL(R) ACTIVE MANAGEMENT", "STANDARD SERIAL OVER BLUETOOTH")):
+                continue
+
+            # Prioritize Huawei VID 12D1 and Huawei PC UI / Modem descriptions
+            is_huawei = "12D1" in hwid or "HUAWEI" in desc or ("MOBILE CONNECT" in desc and "BTH" not in hwid)
+            if is_huawei:
+                # Rank PC UI interface higher than Modem interface for telemetry
+                score = 0
+                if "PC UI" in desc or "MI_01" in hwid or "MI_03" in hwid:
+                    score = 2
+                elif "MODEM" in desc or "MI_00" in hwid:
+                    score = 1
+                candidates.append((score, p.device, p.description, hwid))
+
+        # Sort highest score first (PC UI interface first, Modem second)
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return [(c[1], c[2], c[3]) for c in candidates]
 
     def auto_connect(self):
         """Scans candidate ports and connects to the active PC UI / AT port."""
         candidates = self.list_candidate_ports()
         if not candidates:
-            # Fallback to all COM ports
-            candidates = [(p.device, p.description, p.hwid) for p in serial.tools.list_ports.comports()]
+            return False, "Không tìm thấy cổng AT của thiết bị Huawei."
 
         for dev, desc, hwid in candidates:
             try:
-                s = serial.Serial(dev, self.baudrate, timeout=1.0)
-                # Test with ATE0 and ATI
+                s = serial.Serial(dev, self.baudrate, timeout=0.6)
                 s.write(b"ATE0\r\n")
-                time.sleep(0.15)
+                time.sleep(0.1)
                 s.read_all()
                 s.write(b"ATI\r\n")
-                time.sleep(0.3)
+                time.sleep(0.2)
                 resp = s.read_all().decode("ascii", errors="ignore")
                 s.close()
-                if "HUAWEI" in resp.upper() or "OK" in resp.upper():
+                if "HUAWEI" in resp.upper() or "OK" in resp.upper() or "MODEL" in resp.upper():
                     self.port = dev
                     self.connect(dev)
                     self.fetch_device_info()
@@ -61,7 +75,7 @@ class HuaweiATEngine:
             except Exception:
                 continue
 
-        return False, "No responsive Huawei AT port found."
+        return False, "Không có cổng AT nào phản hồi lệnh điều khiển."
 
     def connect(self, port=None):
         if port:
@@ -80,13 +94,18 @@ class HuaweiATEngine:
 
     def disconnect(self):
         with self.lock:
-            if self.ser and self.ser.is_open:
-                self.ser.close()
-            self.is_connected = False
+            try:
+                if self.ser and self.ser.is_open:
+                    self.ser.close()
+            except Exception:
+                pass
+            finally:
+                self.ser = None
+                self.is_connected = False
 
-    def send_cmd(self, cmd, wait_time=0.3, max_timeout=3.0):
+    def send_cmd(self, cmd, wait_time=0.3, max_timeout=2.0):
         """Sends an AT command and returns cleaned response lines."""
-        if not self.ser or not self.ser.is_open:
+        if not self.ser or not self.ser.is_open or not self.is_connected:
             return []
 
         with self.lock:
@@ -103,9 +122,10 @@ class HuaweiATEngine:
                         lines.append(line)
                         if line in ("OK", "ERROR", "COMMAND NOT SUPPORT") or "CME ERROR" in line or "CMS ERROR" in line:
                             break
-                    time.sleep(0.05)
+                    time.sleep(0.04)
                 return lines
             except Exception as e:
+                self.is_connected = False
                 return [f"ERROR: {e}"]
 
     def fetch_device_info(self):

@@ -317,6 +317,8 @@ class DashboardInterface(QScrollArea):
 
     def on_hardware_state_changed(self, state, detail, drive):
         main_win = self.window()
+        is_switching = getattr(main_win, "is_switching_mode", False)
+
         if state == "DISCONNECTED":
             self.driver_card.setVisible(False)
             self.carrier_badge.setText("CHƯA CẮM DCOM")
@@ -329,13 +331,14 @@ class DashboardInterface(QScrollArea):
             self.conn_status_label.setText("Trạng thái: Chưa có thiết bị")
             self.conn_status_label.setTextColor(QColor("#8A8A8A"), QColor("#8A8A8A"))
             self.conn_sub_label.setText("Hãy cắm thiết bị DCom 3G Huawei vào cổng USB để bắt đầu kết nối.")
-            self.btn_connect.setEnabled(False)
-            self.btn_connect.setText("CHƯA CẮM DCOM 3G")
             self.lbl_device_info.setText("Thiết bị: Chưa phát hiện USB DCom")
             self.lbl_mode_info.setText("Trạng thái: Ngắt kết nối phần cứng (Disconnected)")
             self.lbl_mode_info.setTextColor(QColor("#8A8A8A"), QColor("#8A8A8A"))
-            self.btn_switch.setEnabled(False)
-            self.btn_switch.setText("Chưa cắm DCom")
+            if not is_switching:
+                self.btn_connect.setEnabled(False)
+                self.btn_connect.setText("CHƯA CẮM DCOM 3G")
+                self.btn_switch.setEnabled(False)
+                self.btn_switch.setText("Chưa cắm DCom")
 
         elif state == "ZEROCD":
             self.driver_card.setVisible(False)
@@ -349,13 +352,14 @@ class DashboardInterface(QScrollArea):
             self.conn_status_label.setText("Trạng thái: Cần chuyển sang User Mode")
             self.conn_status_label.setTextColor(QColor("#D83B01"), QColor("#FF8C00"))
             self.conn_sub_label.setText("Thiết bị đang là ổ đĩa ảo. Nhấn '⚡ Chuyển sang User Mode' để kích hoạt Modem 3G.")
-            self.btn_connect.setEnabled(True)
-            self.btn_connect.setText("⚡ CHUYỂN SANG USER MODE (MODEM 3G)")
             self.lbl_device_info.setText(f"Thiết bị: Huawei E173 (Chế độ ZeroCD {drive or 'E'}:\\)")
             self.lbl_mode_info.setText("Chế độ: USB Mass Storage (PID_1446) — Cần chuyển sang Modem")
             self.lbl_mode_info.setTextColor(QColor("#D83B01"), QColor("#FF8C00"))
-            self.btn_switch.setEnabled(True)
-            self.btn_switch.setText("⚡ Chuyển sang User Mode (Modem 3G)")
+            if not is_switching:
+                self.btn_connect.setEnabled(True)
+                self.btn_connect.setText("⚡ CHUYỂN SANG USER MODE (MODEM 3G)")
+                self.btn_switch.setEnabled(True)
+                self.btn_switch.setText("⚡ Chuyển sang User Mode (Modem 3G)")
 
         elif state == "MODEM":
             has_err = getattr(main_win, "current_has_driver_err", False)
@@ -363,10 +367,11 @@ class DashboardInterface(QScrollArea):
             self.lbl_device_info.setText(f"Thiết bị: Huawei E173 ({detail})")
             self.lbl_mode_info.setText("Chế độ phần cứng: Modem Mode (User Mode - Sẵn sàng quay số)")
             self.lbl_mode_info.setTextColor(QColor("#107C41"), QColor("#6CCB5F"))
-            self.btn_switch.setEnabled(True)
-            self.btn_switch.setText("Chuyển về Ổ đĩa ZeroCD (PID_1446)")
+            if not is_switching:
+                self.btn_switch.setEnabled(True)
+                self.btn_switch.setText("Chuyển về Ổ đĩa ZeroCD (PID_1446)")
 
-            if not main_win.dialer.is_connected and not main_win.is_dialing:
+            if not main_win.dialer.is_connected and not main_win.is_dialing and not is_switching:
                 if has_err:
                     self.btn_connect.setEnabled(False)
                     self.btn_connect.setText("LỖI DRIVER - CẦN VÁ DRIVER")
@@ -498,11 +503,21 @@ class SMSInterface(QScrollArea):
         self.layout.addStretch(1)
 
     def _load_inbox(self):
+        main_win = self.window()
+        if getattr(main_win, "current_hw_state", "DISCONNECTED") != "MODEM":
+            InfoBar.warning(
+                "Chưa kết nối Modem",
+                "Thiết bị chưa ở Chế độ Modem 3G hoặc chưa cắm DCom.",
+                parent=self.window(),
+                position=InfoBarPosition.TOP_RIGHT
+            )
+            self.inbox_text.setPlainText("Chưa kết nối Modem 3G. Vui lòng chuyển sang Chế độ Modem để đọc tin nhắn.")
+            return
+
         self.btn_refresh.setEnabled(False)
         self.inbox_text.setPlainText("Đang đọc tin nhắn từ bộ nhớ SIM...")
 
         def _task():
-            main_win = self.window()
             at = main_win.at_engine
             was_ppp = main_win.dialer.is_connected
             main_win.is_dialing = True
@@ -524,6 +539,16 @@ class SMSInterface(QScrollArea):
         threading.Thread(target=_task, daemon=True).start()
 
     def _send_sms(self):
+        main_win = self.window()
+        if getattr(main_win, "current_hw_state", "DISCONNECTED") != "MODEM":
+            InfoBar.warning(
+                "Chưa kết nối Modem",
+                "Vui lòng chuyển sang Chế độ Modem 3G trước khi gửi tin nhắn.",
+                parent=self.window(),
+                position=InfoBarPosition.TOP_RIGHT
+            )
+            return
+
         phone = self.txt_phone.text().strip()
         body = self.txt_sms_body.toPlainText().strip()
         if not phone or not body:
@@ -532,7 +557,6 @@ class SMSInterface(QScrollArea):
 
         self.btn_send_sms.setEnabled(False)
         def _task():
-            main_win = self.window()
             at = main_win.at_engine
             was_ppp = main_win.dialer.is_connected
             main_win.is_dialing = True
@@ -727,13 +751,22 @@ class DriverManagerInterface(QScrollArea):
         ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", f'/c "{bat}"', None, 1)
 
     def _restart_pnp_devices(self):
+        main_win = self.window()
         def _task():
-            cmd = (
-                'pnputil /restart-device "USB\\VID_12D1&PID_1436&MI_00\\6&32CBC2E4&0&0000" && '
-                'pnputil /restart-device "USB\\VID_12D1&PID_1436&MI_03\\6&32CBC2E4&0&0003"'
-            )
-            subprocess.run(cmd, shell=True, capture_output=True, text=True)
-            self.window().signals.call_action_result.emit(True, "Đã khởi động lại các cổng PnP Modem & COM thành công!")
+            try:
+                from src.modeswitch import query_present_huawei_devices
+                devs = query_present_huawei_devices()
+                for d in devs:
+                    dev_id = d["id"]
+                    if "&MI_" in dev_id:
+                        subprocess.run(f'pnputil /restart-device "{dev_id}"', shell=True, capture_output=True, text=True)
+                main_win.signals.notification_requested.emit(
+                    "success", "Khởi động lại PnP", "Đã khởi động lại các cổng PnP Modem & COM thành công!", 4000
+                )
+            except Exception as e:
+                main_win.signals.notification_requested.emit(
+                    "warning", "Khởi động lại PnP", f"Không thể khởi động lại PnP: {e}", 5000
+                )
 
         threading.Thread(target=_task, daemon=True).start()
 
@@ -742,6 +775,12 @@ class DriverManagerInterface(QScrollArea):
         mode_str = "3g_only" if mode_idx == 0 else "auto"
         main_win = self.window()
 
+        if getattr(main_win, "current_hw_state", "DISCONNECTED") != "MODEM":
+            main_win.signals.notification_requested.emit(
+                "warning", "Chưa kết nối Modem", "Vui lòng chuyển sang Chế độ Modem 3G trước khi cấu hình sóng.", 4000
+            )
+            return
+
         self.btn_apply_radio.setEnabled(False)
         def _task():
             main_win.is_dialing = True
@@ -749,7 +788,7 @@ class DriverManagerInterface(QScrollArea):
                 if not main_win.at_engine.is_connected:
                     main_win.at_engine.auto_connect()
                 ok, msg = main_win.at_engine.set_radio_mode(mode_str)
-                main_win.signals.radio_mode_updated.emit(ok, "Đã lưu cấu hình khóa sóng vào NVRAM modem!" if ok else f"Lỗi: {msg}")
+                main_win.signals.radio_mode_result.emit(ok, "Đã lưu cấu hình khóa sóng vào NVRAM modem!" if ok else f"Lỗi: {msg}")
             finally:
                 main_win.is_dialing = False
 
@@ -757,7 +796,10 @@ class DriverManagerInterface(QScrollArea):
 
     def _open_driver_folder(self):
         drv_dir = get_resource_dir("drivers")
-        os.system(f'explorer "{drv_dir}"')
+        try:
+            os.startfile(drv_dir)
+        except Exception:
+            subprocess.Popen(f'explorer "{drv_dir}"', shell=True)
 
     def _refresh_interfaces_table(self):
         devices = query_present_huawei_devices()
@@ -892,10 +934,18 @@ class WinUI3MainWindow(FluentWindow):
         self.dialer = WindowsRASDialer()
         self.dialer.ensure_phonebook_entry("MobiFone")
         self.current_carrier = "MobiFone"
-        self.current_hw_state = "DISCONNECTED"
-        self.current_has_driver_err = False
         self.is_switching_mode = False
         self.signals = TelemetrySignals()
+
+        # Immediate synchronous hardware state check (< 1ms native SetupAPI)
+        try:
+            init_state, init_detail, init_drive, init_err = get_device_state()
+            self.current_hw_state = init_state
+            self.current_has_driver_err = init_err
+        except Exception:
+            init_state, init_detail, init_drive, init_err = "DISCONNECTED", "Chưa cắm thiết bị", None, False
+            self.current_hw_state = "DISCONNECTED"
+            self.current_has_driver_err = False
 
         # Connect signals
         self.signals.signal_updated.connect(self._on_signal_updated)
@@ -916,6 +966,9 @@ class WinUI3MainWindow(FluentWindow):
         self.smsInterface = SMSInterface(self)
         self.driverInterface = DriverManagerInterface(self)
         self.settingsInterface = SettingsInterface(self)
+
+        # Initial UI synchronization with detected hardware state
+        self.dashboardInterface.on_hardware_state_changed(init_state, init_detail, init_drive)
 
         # Navigation Items
         self.addSubInterface(
@@ -1045,8 +1098,15 @@ class WinUI3MainWindow(FluentWindow):
             InfoBar.info(title, msg, parent=self, position=InfoBarPosition.TOP_RIGHT, duration=duration)
 
     def _on_mode_switch_finished(self, ok, msg):
-        self.dashboardInterface.btn_switch.setEnabled(True)
-        self.dashboardInterface.btn_connect.setEnabled(True)
+        self.is_switching_mode = False
+        try:
+            state, detail, drive, has_driver_err = get_device_state()
+            self.current_hw_state = state
+            self.current_has_driver_err = has_driver_err
+            self.dashboardInterface.on_hardware_state_changed(state, detail, drive)
+        except Exception:
+            self.dashboardInterface.btn_switch.setEnabled(True)
+            self.dashboardInterface.btn_connect.setEnabled(True)
 
     def _background_telemetry_loop(self):
         last_state = None
